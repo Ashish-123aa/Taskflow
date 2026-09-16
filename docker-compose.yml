@@ -1,0 +1,129 @@
+name: taskflow
+
+services:
+  # ── Infrastructure ────────────────────────────────────────────────────
+  # These two are functional today: Phase 1 database design targets this
+  # Postgres instance, and `npm run prisma:migrate` runs against it.
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: taskflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: taskflow
+      POSTGRES_PASSWORD: taskflow_dev_password
+      POSTGRES_DB: taskflow
+    ports:
+      - '5432:5432'
+    volumes:
+      - taskflow-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U taskflow -d taskflow']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: taskflow-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - taskflow-redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Optional dev-only UIs. Not required, just convenient for inspecting
+  # the database and queue while developing.
+  adminer:
+    image: adminer:latest
+    container_name: taskflow-adminer
+    restart: unless-stopped
+    ports:
+      - '8081:8080'
+    depends_on:
+      - postgres
+
+  # A local SMTP server for the EMAIL job handler (Phase 4). MailHog
+  # accepts any mail sent to it and shows it in a web UI at :8025 instead
+  # of actually delivering anything — exactly what local development needs
+  # (section 17: "During local development use MailHog").
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: taskflow-mailhog
+    restart: unless-stopped
+    ports:
+      - '1025:1025' # SMTP — what the worker connects to
+      - '8025:8025' # Web UI — open this in a browser to see "sent" mail
+
+  # ── Application services ──────────────────────────────────────────────
+  # `api` and `worker` are both live now that they have real code behind
+  # them (Phases 2 and 3). `web` stays commented out until the frontend is
+  # more than a placeholder — see docs/architecture.md for the phase plan.
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    container_name: taskflow-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Overrides whatever UPLOAD_DIR is set to in .env for local
+      # (non-Docker) dev — inside the container, uploads live on the
+      # shared volume below, not a host-relative "./uploads".
+      - UPLOAD_DIR=/app/uploads
+    ports:
+      - '4000:4000'
+    volumes:
+      - taskflow-uploads-data:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    container_name: taskflow-worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Same shared volume as `api` — the worker reads CSV/image files the
+      # API's upload endpoints wrote, and writes generated reports/images
+      # back into it (see docs/file-handling.md). `SMTP_HOST=mailhog` uses
+      # Docker's service-name DNS instead of localhost, since from inside
+      # this container "localhost" would mean the worker container itself,
+      # not the mailhog container.
+      - UPLOAD_DIR=/app/uploads
+      - SMTP_HOST=mailhog
+    volumes:
+      - taskflow-uploads-data:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+
+  # web:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/web.Dockerfile
+  #   container_name: taskflow-web
+  #   ports:
+  #     - '5173:5173'
+  #   depends_on:
+  #     - api
+
+volumes:
+  taskflow-postgres-data:
+  taskflow-redis-data:
+  taskflow-uploads-data:

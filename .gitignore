@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build output
+dist/
+build/
+apps/web/dist/
+
+# Prisma
+packages/shared/prisma/migrations/dev.db
+
+# Uploads (user-supplied files, never committed)
+uploads/
+apps/api/uploads/
+
+# Logs
+*.log
+npm-debug.log*
+logs/
+
+# Testing
+coverage/
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# TypeScript build info
+*.tsbuildinfo

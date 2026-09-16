@@ -1,0 +1,37 @@
+{
+  "name": "taskflow",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Distributed job processing & automation platform",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "prisma:generate": "npm run generate --workspace=@taskflow/shared",
+    "prisma:migrate": "npm run migrate:dev --workspace=@taskflow/shared",
+    "prisma:studio": "npm run studio --workspace=@taskflow/shared",
+    "prisma:seed": "npm run seed --workspace=@taskflow/shared",
+    "dev:api": "npm run dev --workspace=@taskflow/api",
+    "dev:worker": "npm run dev --workspace=@taskflow/worker",
+    "dev:web": "npm run dev --workspace=@taskflow/web",
+    "test:api": "npm run test --workspace=@taskflow/api",
+    "test:worker": "npm run test --workspace=@taskflow/worker",
+    "test:shared": "npm run test --workspace=@taskflow/shared",
+    "docker:up": "docker compose up -d postgres redis",
+    "docker:up:full": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "lint": "eslint . --ext .ts,.tsx --ignore-path .gitignore",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "eslint": "^8.57.0",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "prettier": "^3.3.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

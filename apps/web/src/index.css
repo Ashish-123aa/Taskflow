@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: theme('fontFamily.sans');
+  }
+
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: theme('fontFamily.display');
+  }
+
+  /* A visible, on-brand focus ring everywhere — relying on the browser
+     default would be inconsistent across form controls/buttons/links,
+     and removing it entirely (a common accessibility mistake) isn't
+     acceptable for a tool people navigate with a keyboard all day. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-white;
+  }
+}
+
+@layer components {
+  /* Shared across every form in the app (login, register, job creation,
+     schedule creation) — defined once here rather than repeating the same
+     class string in every input across a dozen files. */
+  .input {
+    @apply w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-500;
+  }
+
+  .label {
+    @apply text-sm font-medium text-slate-700;
+  }
+}

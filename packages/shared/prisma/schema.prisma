@@ -1,0 +1,225 @@
+// TaskFlow — Core Database Schema
+// This schema lives in packages/shared because BOTH the API process and the
+// Worker process need to read/write the same tables using the same
+// generated Prisma Client and the same TypeScript types.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────────────────
+
+enum Role {
+  USER
+  ADMIN
+}
+
+// The job lifecycle described in the spec, plus DEAD_LETTER as an explicit
+// terminal state so admins can query "which jobs exhausted all retries?"
+// directly with `WHERE status = 'DEAD_LETTER'` instead of re-deriving it
+// from (status = FAILED AND attempts >= maxAttempts) on every query.
+enum JobStatus {
+  PENDING
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  RETRYING
+  CANCELLED
+  DEAD_LETTER
+}
+
+enum JobPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AttemptStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum NotificationType {
+  JOB_COMPLETED
+  JOB_FAILED
+  JOB_DEAD_LETTER
+  SCHEDULE_TRIGGERED
+  SYSTEM_ERROR
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Models
+// ─────────────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(USER)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  jobs          Job[]
+  schedules     Schedule[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+
+  // email already has an implicit index from @unique, but we declare it
+  // explicitly so it shows up in `database.md` as an intentional decision,
+  // not an accident of the unique constraint.
+  @@index([email])
+  @@map("users")
+}
+
+model Job {
+  id     String @id @default(uuid())
+  userId String
+
+  // `type` is a plain string, not a Postgres enum — see docs/database.md
+  // ("Why is Job.type a string instead of an enum?"). Short version: new
+  // job types must be addable without a schema migration, so the set of
+  // valid types is enforced in the application layer (a handler registry
+  // validated with Zod), not in the database.
+  type String
+
+  name String
+
+  status   JobStatus   @default(PENDING)
+  priority JobPriority @default(MEDIUM)
+
+  // Arbitrary per-job-type input/output. Each handler defines and validates
+  // its own payload/result shape with a Zod schema in packages/shared.
+  payload Json
+  result  Json?
+  error   String?
+
+  progress    Int @default(0)
+  attempts    Int @default(0)
+  maxAttempts Int @default(3)
+
+  scheduledAt DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+  failedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobAttempts   JobAttempt[]
+  notifications Notification[]
+
+  // Every index here maps to a query pattern named in the spec:
+  //   userId    -> "GET /jobs" scoped to the logged-in user
+  //   status    -> dashboard counts, admin dead-letter view, queue recovery
+  //   type      -> "jobs by type" chart, per-type admin filters
+  //   createdAt -> default sort order + "jobs over time" chart + pagination
+  //   priority  -> admin queue inspection / priority filter
+  @@index([userId])
+  @@index([status])
+  @@index([type])
+  @@index([createdAt])
+  @@index([priority])
+  @@map("jobs")
+}
+
+// One row per execution attempt. This is what powers the "Attempt 1 →
+// Failed, Attempt 2 → Failed..." timeline on the job details page, and lets
+// us answer "why did this fail?" without overwriting history on retry.
+model JobAttempt {
+  id            String        @id @default(uuid())
+  jobId         String
+  attemptNumber Int
+  status        AttemptStatus
+  startedAt     DateTime      @default(now())
+  completedAt   DateTime?
+  error         String?
+  duration      Int? // milliseconds
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@map("job_attempts")
+}
+
+model Schedule {
+  id             String      @id @default(uuid())
+  userId         String
+  name           String
+  jobType        String
+  payload        Json
+  cronExpression String
+  // Added in Phase 7, once scheduling was actually implemented — a
+  // scheduled job needs the same priority/retry configuration a manually
+  // created one does (createJobSchema already supports both), so
+  // Schedule carries the same fields to pass through on each trigger.
+  priority       JobPriority @default(MEDIUM)
+  maxAttempts    Int?
+  isActive       Boolean     @default(true)
+  nextRunAt      DateTime?
+  lastRunAt      DateTime?
+  // Set when a trigger fails (e.g. the target job type's payload
+  // validation now rejects what's stored here) and cleared on the next
+  // successful trigger — lets a user or admin see *why* a schedule
+  // stopped producing jobs without having to dig through worker logs.
+  lastError      String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // The scheduler's core query is "give me every active schedule whose
+  // nextRunAt has passed", so nextRunAt needs its own index — a query
+  // filtering on isActive + ordering/filtering by nextRunAt would do a full
+  // scan without it once the table grows.
+  @@index([userId])
+  @@index([nextRunAt])
+  @@map("schedules")
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  jobId     String?
+  type      NotificationType
+  message   String
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job  Job? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  action     String
+  resource   String
+  resourceId String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  // onDelete: SetNull — an audit log entry should survive the deletion of
+  // the user who caused it. Losing "who did this" history when an account
+  // is removed defeats the purpose of an audit log.
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([resource, resourceId])
+  @@map("audit_logs")
+}

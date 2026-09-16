@@ -1,0 +1,12 @@
+node_modules
+**/node_modules
+**/dist
+**/.env
+**/.env.local
+.git
+.github
+docs
+*.md
+**/tests
+**/*.test.ts
+coverage

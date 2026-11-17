@@ -126,3 +126,70 @@ pattern — separate "the part that needs live infrastructure" from "the
 part that's pure logic," and test the second part thoroughly even when
 the first part can't be tested here — shows up throughout Phase 4's
 handlers, not just this one.
+
+## Worker liveness (Phase 10.1)
+
+Section 38 asks `GET /health` to report on the worker specifically, not
+just the API and its own direct dependencies (Postgres, Redis) — but the
+worker is a separate process the API has no direct handle on (no shared
+memory, no RPC channel between them). `apps/worker/src/utils/heartbeat.ts`
+and `apps/api/src/services/workerHealth.ts` bridge that gap the same way
+the rest of this project bridges API↔worker communication: through
+Redis, not a new mechanism invented just for this.
+
+**The mechanism.** The worker writes the current time to a single,
+well-known Redis key (`WORKER_HEARTBEAT_KEY`, defined once in
+`packages/shared` — the same reasoning as `JOB_QUEUE_NAME` and
+`JOB_EVENTS_CHANNEL`, so the writer and reader can never drift onto two
+different key names) on a configurable interval
+(`WORKER_HEARTBEAT_INTERVAL_MS`, default 10s), with a TTL a few ticks
+longer than that interval (`WORKER_HEARTBEAT_TIMEOUT_MS`, default 30s —
+validated at startup to be greater than the interval, so a misconfigured
+pair can't make every heartbeat stale on arrival). As long as the writes
+keep landing, the key stays alive; the moment they stop — a crash, an
+unhandled rejection, the container getting killed — Redis's own TTL
+removes the key on its own. `GET /health` just checks whether the key
+currently exists.
+
+**Why this satisfies "do not report the worker as healthy when its
+heartbeat is stale" without any time-math on the reading side.** The
+naive version of this feature compares "now" against a stored last-seen
+timestamp and a timeout threshold, computed wherever the check happens.
+That means duplicating the threshold in two places (or importing it
+across a process boundary) and trusting that the API's and worker's
+clocks agree closely enough. Using Redis's own `EXPIRE` instead means
+staleness *is* non-existence — there's no separate check to get wrong,
+and no clock-skew risk, since the TTL countdown is tracked by Redis's own
+server clock from the moment the `SET ... EX` command was received, not
+by comparing two different processes' idea of "now."
+
+**Why a single key, not one per worker instance.** The question
+`GET /health` needs answered is "is there a worker alive right now",
+not "which specific worker process is this" — see the full reasoning in
+`packages/shared/src/health/worker-heartbeat.ts`'s own comment. If more
+than one worker container is ever run at once (docs/architecture.md's
+scalability diagram), each one just refreshes the same key on its own
+schedule; Redis's normal last-write-wins semantics mean the key stays
+fresh as long as *any* instance is still ticking, which is exactly the
+question being asked, with no per-worker bookkeeping needed.
+
+**Distinguishing "worker is dead" from "can't tell" — see
+`deriveWorkerStatus` in `apps/api/src/services/workerHealth.ts`.** If
+Redis itself is unreachable, a missing heartbeat key doesn't mean the
+worker crashed — it means the API lost the one channel that could tell
+it either way. That case reports `worker: "unknown"`, not
+`worker: "unhealthy"`: folding it into "unhealthy" would claim to have
+positively observed the worker as down, when what actually happened is
+TaskFlow's own monitoring signal broke. This is what section 10.1's
+"keep API, Redis and worker health states distinguishable" means in
+practice — a Redis outage should read as a Redis problem, not get
+misattributed to the worker.
+
+**Graceful shutdown clears the key immediately.** `apps/worker/src/index.ts`'s
+shutdown handler calls `clearHeartbeat()` before closing its Redis
+connections, so a deliberately-stopped worker (a deploy, a scale-down)
+is reported unhealthy right away instead of appearing falsely alive for
+up to `WORKER_HEARTBEAT_TIMEOUT_MS` afterward. A crash skips this by
+definition — there's no shutdown handler left to run — which is exactly
+why the TTL exists as the fallback for that case rather than being the
+only mechanism.

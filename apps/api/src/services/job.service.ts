@@ -3,6 +3,7 @@ import { jobRepository, type JobListFilters } from '../repositories/job.reposito
 import { auditLogRepository } from '../repositories/audit.repository';
 import { jobQueue } from '../queues/job.queue';
 import { publishJobEvent } from '../events/publisher';
+import { dashboardStatsCache } from './dashboardCache';
 import { ForbiddenError, NotFoundError, ConflictError } from '../utils/errors';
 import { logger } from '../config/logger';
 
@@ -214,5 +215,15 @@ export const jobService = {
 
     await jobRepository.remove(job.id);
     logger.info('Job deleted', { jobId: job.id, userId: requester.id });
+
+    // Phase 9.3 — the one job mutation that doesn't publish a job:*
+    // event (nothing real-time needs to know a finished job was deleted),
+    // which is exactly why websocket/socket.ts's event-driven
+    // invalidation never sees it. Deleting a COMPLETED/FAILED/etc. job
+    // changes every aggregate the dashboard shows (totals, success rate,
+    // jobs-over-time), so the owner's cached stats are invalidated here
+    // directly — and against job.userId, not requester.id, so an admin
+    // deleting someone else's job invalidates the *owner's* cache.
+    void dashboardStatsCache.invalidate(job.userId);
   },
 };

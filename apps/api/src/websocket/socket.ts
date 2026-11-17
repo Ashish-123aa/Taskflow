@@ -4,6 +4,7 @@ import { JOB_EVENTS_CHANNEL, type JobEventPayload } from '@taskflow/shared';
 import { env } from '../config/env';
 import { redisSubscriber } from '../config/redis';
 import { verifyToken } from '../services/token.service';
+import { dashboardStatsCache } from '../services/dashboardCache';
 import { logger } from '../config/logger';
 import { extractTokenFromCookieHeader } from './cookie';
 
@@ -66,6 +67,21 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
     try {
       const event = JSON.parse(message) as JobEventPayload;
       io.to(`user:${event.userId}`).emit(event.type, event);
+
+      // Phase 9.3 — this subscriber is the one place in the API process
+      // that hears about *every* job-status transition, whether it
+      // originated in the worker (started/completed/failed/retrying/
+      // dead_letter) or in the API itself (queued/cancelled), so it's
+      // where the owner's cached dashboard stats get invalidated —
+      // rather than scattering invalidation calls through every code
+      // path that can change a job's status. job:progress is excluded:
+      // a progress tick never changes any aggregate the dashboard
+      // shows (counts by status/type, success rate, durations), and
+      // invalidating on every one would defeat the cache entirely for
+      // anyone with a long-running job open.
+      if (event.type !== 'job:progress') {
+        void dashboardStatsCache.invalidate(event.userId);
+      }
     } catch (err) {
       logger.error('Failed to parse job event from Redis', { error: err, raw: message });
     }

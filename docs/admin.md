@@ -89,7 +89,50 @@ see `apps/api/tests/admin.test.ts` for the corresponding test that a
 user cancelling their *own* job does **not** produce a log entry, only a
 genuine cross-user override does.
 
-There is no admin-facing endpoint to *read* the audit log yet — the
-repository (`auditLogRepository.findAll`) exists, but wiring it up to a
-route is deferred to the observability phase (Phase 10), alongside admin
-metrics and worker status, rather than added piecemeal here.
+## Reading the audit log — `GET /admin/audit-logs` (Phase 10.2)
+
+The repository method (`auditLogRepository.findAll`) existed since Phase
+5 — every admin override was already being recorded — but nothing read
+it back until Phase 10.2 wired it up to a route, gated by the same
+`authorize('ADMIN')` check every other route in this file uses. No new
+authorization logic was needed: an audit log entry isn't "owned" by
+anyone the way a job or a user account is, so there's no per-row
+ownership check to write, only the existing route-level admin gate.
+
+Supports the same pagination shape as `/admin/jobs` and `/admin/users`
+(`page`, `limit`, capped at 100), plus filtering and sorting:
+
+- **`userId`** — the *acting* admin, not a target. Every `AuditLog` row's
+  `userId` is whoever performed the action (`auditLogRepository.record`
+  is always called with `actingAdminId`, never the person being acted
+  on) — this filter answers "what has this admin done," not "what has
+  happened to this user."
+- **`resource`** / **`resourceId`** — what was acted on (e.g. `resource:
+  "Job"`, `resourceId: <a specific job's id>`), for "show me everything
+  that happened to this one resource."
+- **`action`** — the exact recorded action string (`USER_ENABLED`,
+  `USER_DISABLED`, `ADMIN_JOB_CANCEL`, `ADMIN_JOB_RETRY` today; a new
+  admin-override action added later needs no schema change here, the
+  same way `Job.type` needs none — see `docs/database.md`).
+- **`fromDate`** / **`toDate`** — bounds on `createdAt`, coerced the same
+  way `REPORT_GENERATION`'s payload schema coerces its own date range.
+- **`sortOrder`** — `asc` or `desc` on `createdAt`, default `desc` (most
+  recent first, matching every other list endpoint in this app).
+
+The filter-combining logic (`buildAuditLogWhereClause` in
+`repositories/audit.repository.ts`) is pulled out as its own pure
+function, the same reasoning as `handlers/report-format.ts` on the worker
+side: the part of this feature that needs a live database and the part
+that's pure "which Prisma `where` clause does this combination of
+filters produce" logic don't have to be tested together just because
+they're called together — see `apps/api/tests/auditLog.test.ts`, which
+exercises the filter combinations directly with no database involved.
+
+**Response shape stays close to the raw model** — `id`, `userId`,
+`action`, `resource`, `resourceId`, `metadata`, `createdAt` — deliberately
+not joined against the `User` table to also return the acting admin's
+name or email. Every admin viewing this list already has `/admin/users`
+available to look up any `userId` they need more detail on; adding an
+unconditional join here would mean this endpoint routinely returns more
+than what it's actually for, for every request, whether or not the
+caller wanted it.

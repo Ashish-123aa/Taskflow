@@ -115,17 +115,36 @@ main bundle from ~888KB to ~463KB, with Recharts isolated into its own
 ~417KB chunk that only downloads when someone actually visits
 `/dashboard`.
 
-## What isn't tested yet
+## Tests
 
-Every backend phase in this project has a real test suite (see each
-phase's own docs). The frontend doesn't yet — no component or
-integration tests, no Playwright/Cypress e2e coverage. What *was*
-verified here is a full production build (`tsc -b && vite build`)
-against the actual dependency versions, which catches type errors,
-import-resolution problems, and JSX/config issues a read-through alone
-would likely miss (it caught several real bugs during this phase, mostly
-around TypeScript not being able to narrow a `useQuery` result's `data`
-field to defined inside a JSX ternary the way an explicit early-return
-`if` block allows). Real frontend test coverage is reasonable scope for
-Phase 11 ("broader test coverage"), alongside the backend gaps already
-noted there.
+Added in Phase 11.3. Vitest (the same runner the other workspaces use) with
+Testing Library, `user-event`, and jsdom — deliberately no MSW or
+Cypress/Playwright: the `api` module is mocked at the module boundary
+(`vi.mock('../src/lib/api', ...)`, keeping the real `ApiRequestError`),
+which is enough to test what each page decides to do with a response
+without standing up a fake server. Run with `npm run test:web`.
+
+What's covered: login and register (client-side validation, success
+navigation, server errors), the route guards (loading, redirect, role
+gating), job creation (type-aware sub-forms, correct payload and
+endpoint per type, CSV upload), the dashboard (loading/error/retry/stats),
+the job list (search, state-dependent row actions, cancel dialog,
+pagination), job details (state-dependent actions, progress, timeline,
+attempts, download link), the shared UI primitives, and the formatting
+helpers.
+
+Two jsdom findings worth knowing about when writing more of these:
+
+- **Submitting a form whose fields are wrapped in `<label>`** (this app's
+  `Field` component) doesn't trigger `react-hook-form`'s `onSubmit` when
+  the submit *button* is clicked — neither `userEvent.click` nor
+  `fireEvent.click` does. `submitClosestForm()` in `tests/test-utils.tsx`
+  fires `submit` on the form directly; it still exercises the real
+  `handleSubmit`. Real browsers are unaffected.
+- **`recharts` needs `ResizeObserver`**, which jsdom lacks, so the dashboard
+  test mocks the chart components as plain elements — it tests what the
+  page decides to show, not SVG geometry.
+
+The remaining gap is end-to-end coverage (a real browser against a real
+API); `tests/` is also outside `tsconfig`'s `include`, matching the other
+workspaces, so the test files are type-checked only when added to it.

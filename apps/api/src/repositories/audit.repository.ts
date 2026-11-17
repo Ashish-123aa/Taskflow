@@ -1,4 +1,5 @@
 import { prisma } from '@taskflow/shared';
+import type { Prisma } from '@taskflow/shared';
 
 interface AuditLogEntry {
   userId?: string;
@@ -8,17 +9,46 @@ interface AuditLogEntry {
   metadata?: Record<string, unknown>;
 }
 
+export interface AuditLogListFilters {
+  page: number;
+  limit: number;
+  userId?: string;
+  action?: string;
+  resource?: string;
+  resourceId?: string;
+  fromDate?: Date;
+  toDate?: Date;
+  sortOrder?: 'asc' | 'desc';
+}
+
 /**
- * The AuditLog model has existed in the schema since Phase 1's database
- * design, unused until now — it's used starting here, for exactly the
- * kind of action the spec names it for (section 6: "Track important
- * actions"): an admin acting on another user's account or job. Regular
- * self-service actions (a user cancelling their own job) don't need an
- * audit trail; a user can already see their own activity in their own
- * job/notification history. What's worth a separate, tamper-evident-ish
- * record is specifically when someone acts on a resource that isn't
- * theirs.
+ * Builds the Prisma `where` clause for a filtered audit-log query. Split
+ * out as its own pure function — no Prisma import beyond the type, no
+ * I/O — for the same reason `handlers/report-format.ts` is split out
+ * from `report-generation.handler.ts` (see docs/worker-system.md): the
+ * part of this feature that needs a live database and the part that's
+ * pure filter-combining logic don't have to be tested together just
+ * because they're called together. See tests/auditLog.test.ts.
  */
+export function buildAuditLogWhereClause(
+  filters: Pick<AuditLogListFilters, 'userId' | 'action' | 'resource' | 'resourceId' | 'fromDate' | 'toDate'>,
+): Prisma.AuditLogWhereInput {
+  return {
+    ...(filters.userId ? { userId: filters.userId } : {}),
+    ...(filters.action ? { action: filters.action } : {}),
+    ...(filters.resource ? { resource: filters.resource } : {}),
+    ...(filters.resourceId ? { resourceId: filters.resourceId } : {}),
+    ...(filters.fromDate || filters.toDate
+      ? {
+          createdAt: {
+            ...(filters.fromDate ? { gte: filters.fromDate } : {}),
+            ...(filters.toDate ? { lte: filters.toDate } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
 export const auditLogRepository = {
   record(entry: AuditLogEntry) {
     return prisma.auditLog.create({
@@ -32,14 +62,26 @@ export const auditLogRepository = {
     });
   },
 
-  findAll(params: { page: number; limit: number }) {
-    return Promise.all([
+  /**
+   * Phase 10.2: now takes the same filter/sort/paginate shape as
+   * `jobRepository.findMany` and `userRepository.findAll`, rather than
+   * just page/limit — see `GET /admin/audit-logs`
+   * (controllers/admin.controller.ts) for the query parameters this
+   * backs.
+   */
+  async findAll(filters: AuditLogListFilters) {
+    const where = buildAuditLogWhereClause(filters);
+
+    const [logs, total] = await Promise.all([
       prisma.auditLog.findMany({
-        orderBy: { createdAt: 'desc' },
-        skip: (params.page - 1) * params.limit,
-        take: params.limit,
+        where,
+        orderBy: { createdAt: filters.sortOrder ?? 'desc' },
+        skip: (filters.page - 1) * filters.limit,
+        take: filters.limit,
       }),
-      prisma.auditLog.count(),
-    ]).then(([logs, total]) => ({ logs, total }));
+      prisma.auditLog.count({ where }),
+    ]);
+
+    return { logs, total };
   },
 };

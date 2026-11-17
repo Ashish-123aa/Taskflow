@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '@taskflow/shared';
 import { redisConnection } from '../config/redis';
 import { asyncHandler } from '../utils/asyncHandler';
+import { checkWorkerHealth, deriveWorkerStatus } from '../services/workerHealth';
 
 const router = Router();
 
@@ -24,23 +25,32 @@ async function checkRedis(): Promise<boolean> {
 }
 
 /**
- * Now checks the database AND Redis, since the API depends on both as of
- * Phase 3 (job creation writes to Postgres and enqueues to Redis). Worker
- * liveness isn't included yet — that needs the worker to report its own
- * heartbeat somewhere the API can read, which is a Phase 10 concern
- * (section 38 groups "API, Database, Redis, Worker" together, but they
- * don't all become checkable at once).
+ * Checks the database, Redis, AND worker liveness (section 38) — the
+ * worker check is a Phase 10.1 addition; see services/workerHealth.ts
+ * for the heartbeat mechanism it reads. Each component is reported
+ * separately and independently (section 10.1: "keep API, Redis and
+ * worker health states distinguishable") — the fact that this endpoint
+ * answered at all is itself the API's own liveness signal, so there's
+ * no separate "api" field the way there is for the other three.
  */
 router.get(
   '/health',
   asyncHandler(async (_req, res) => {
-    const [databaseHealthy, redisHealthy] = await Promise.all([checkDatabase(), checkRedis()]);
-    const healthy = databaseHealthy && redisHealthy;
+    const [databaseHealthy, redisHealthy, workerHealth] = await Promise.all([
+      checkDatabase(),
+      checkRedis(),
+      checkWorkerHealth(),
+    ]);
+
+    const workerStatus = deriveWorkerStatus(redisHealthy, workerHealth);
+    const healthy = databaseHealthy && redisHealthy && workerStatus === 'healthy';
 
     res.status(healthy ? 200 : 503).json({
       status: healthy ? 'healthy' : 'unhealthy',
       database: databaseHealthy ? 'healthy' : 'unhealthy',
       redis: redisHealthy ? 'healthy' : 'unhealthy',
+      worker: workerStatus,
+      workerLastHeartbeatAt: workerHealth.lastHeartbeatAt,
     });
   }),
 );

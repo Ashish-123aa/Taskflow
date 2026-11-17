@@ -52,3 +52,18 @@ export class ConflictError extends AppError {
     super(message, 409, 'CONFLICT');
   }
 }
+
+/**
+ * Thrown by middleware/rateLimit.ts once a caller has exceeded one of the
+ * budgets from section 25 (auth attempts, general API traffic, job
+ * creation). Deliberately generic rather than naming which budget or
+ * window was hit — the Retry-After header (set by the rate limiter
+ * itself, not this class) already tells the caller how long to wait,
+ * and the response body doesn't need to hand back the limiter's internal
+ * configuration on top of that.
+ */
+export class TooManyRequestsError extends AppError {
+  constructor(message = 'Too many requests — please try again later') {
+    super(message, 429, 'TOO_MANY_REQUESTS');
+  }
+}

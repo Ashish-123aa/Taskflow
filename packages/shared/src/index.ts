@@ -11,6 +11,7 @@ export * from './queue/job-data';
 export * from './queue/connection';
 export * from './events/job-events';
 export * from './events/publish-job-event';
+export * from './health/worker-heartbeat';
 export * from './logger';
 export * from './prisma';
 export * from '@prisma/client';

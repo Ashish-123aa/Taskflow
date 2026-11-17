@@ -1,4 +1,6 @@
 import { NonRetryableJobError } from '../../utils/errors';
+import { safeFetch } from '../../utils/ssrf-guard';
+import { env } from '../../config/env';
 import type { JobExecutionContext, JobHandler } from '../handler.types';
 
 interface ApiRequestPayload {
@@ -14,12 +16,16 @@ interface ApiRequestPayload {
  * uses to prove the whole pipeline — create → queue → worker → external
  * call → COMPLETED → dashboard update.
  *
- * SSRF protection (blocking localhost/private IPs/cloud metadata
- * endpoints, response size caps, redirect limits — section 57) is NOT
- * implemented yet. This is safe to use against the recommended free
- * public APIs (Open-Meteo, REST Countries, JSONPlaceholder) but is not
- * yet safe to expose to arbitrary user-supplied URLs — see
- * docs/security.md.
+ * As of Phase 9, every outbound call goes through `safeFetch`
+ * (utils/ssrf-guard.ts) instead of the bare global `fetch`: it blocks
+ * localhost/private/link-local/reserved addresses (including the
+ * 169.254.169.254 cloud-metadata address), only allows http/https,
+ * re-validates every redirect hop by hand rather than letting `fetch`
+ * auto-follow, and enforces both a request timeout and a response-size
+ * cap (`EXTERNAL_REQUEST_TIMEOUT_MS` / `EXTERNAL_MAX_RESPONSE_SIZE_MB`).
+ * See docs/security.md for the full reasoning and the one limitation
+ * that guard documents rather than silently ignores (no IP-pinning
+ * against DNS rebinding).
  */
 export const apiRequestHandler: JobHandler = {
   async execute(ctx: JobExecutionContext) {
@@ -29,28 +35,31 @@ export const apiRequestHandler: JobHandler = {
       throw new NonRetryableJobError('API_REQUEST payload requires a "url"');
     }
 
-    let url: URL;
-    try {
-      url = new URL(payload.url);
-    } catch {
-      throw new NonRetryableJobError(`"${payload.url}" is not a valid URL`);
-    }
-
     await ctx.updateProgress(10);
 
     const start = Date.now();
-    const response = await fetch(url, {
+    const { response, body: rawBody } = await safeFetch(payload.url, {
       method: payload.method ?? 'GET',
       headers: payload.headers,
       body: payload.body !== undefined ? JSON.stringify(payload.body) : undefined,
+      timeoutMs: env.EXTERNAL_REQUEST_TIMEOUT_MS,
+      maxResponseBytes: env.EXTERNAL_MAX_RESPONSE_SIZE_MB * 1024 * 1024,
     });
 
     await ctx.updateProgress(70);
 
     const contentType = response.headers.get('content-type') ?? '';
-    const responseBody = contentType.includes('application/json')
-      ? await response.json()
-      : await response.text();
+    let responseBody: unknown = rawBody;
+    if (contentType.includes('application/json')) {
+      try {
+        responseBody = rawBody.length > 0 ? JSON.parse(rawBody) : null;
+      } catch {
+        // The server claimed JSON in its Content-Type but didn't send
+        // valid JSON — fall back to the raw text rather than failing the
+        // whole job over a header/body mismatch that isn't TaskFlow's.
+        responseBody = rawBody;
+      }
+    }
 
     await ctx.updateProgress(100);
 
@@ -58,8 +67,8 @@ export const apiRequestHandler: JobHandler = {
     // TaskFlow job: the request completed and we captured exactly what
     // the target returned (section 16: "store status code, response,
     // duration, timestamp"). Only a request that never got a response at
-    // all — a network failure or timeout, which `fetch` surfaces by
-    // throwing — counts as a job failure here.
+    // all — a network failure, a timeout, or one refused outright by the
+    // SSRF guard above — counts as a job failure here.
     return {
       statusCode: response.status,
       response: responseBody,

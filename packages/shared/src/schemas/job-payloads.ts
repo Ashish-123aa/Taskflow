@@ -1,8 +1,31 @@
 import { z } from 'zod';
 import type { JobType } from '../constants/job-types';
 
+// Phase 9.1 — a cheap, synchronous protocol check. Only http/https is ever
+// legitimate for an outbound API_REQUEST / SCHEDULED_API_FETCH job, so an
+// obviously wrong scheme (file://, ftp://, gopher://, ...) is rejected
+// with an immediate 400 at job-creation time instead of becoming a job
+// that fails later in the worker. This is NOT the SSRF defense itself:
+// blocking localhost / private / link-local addresses needs a DNS lookup,
+// and a lookup at creation time can't be trusted (the same hostname can
+// resolve differently by the time the job actually runs). That
+// authoritative check lives in the worker — see
+// apps/worker/src/utils/ssrf-guard.ts and docs/security.md.
+const ALLOWED_URL_PROTOCOLS = new Set(['http:', 'https:']);
+
+function hasAllowedProtocol(value: string): boolean {
+  try {
+    return ALLOWED_URL_PROTOCOLS.has(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
 export const apiRequestPayloadSchema = z.object({
-  url: z.string().url(),
+  url: z
+    .string()
+    .url()
+    .refine(hasAllowedProtocol, { message: 'Only http and https URLs are allowed' }),
   method: z.enum(['GET', 'POST']).optional(),
   headers: z.record(z.string()).optional(),
   body: z.unknown().optional(),

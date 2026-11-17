@@ -18,6 +18,7 @@
     "test:api": "npm run test --workspace=@taskflow/api",
     "test:worker": "npm run test --workspace=@taskflow/worker",
     "test:shared": "npm run test --workspace=@taskflow/shared",
+    "test:web": "npm run test --workspace=@taskflow/web",
     "docker:up": "docker compose up -d postgres redis",
     "docker:up:full": "docker compose up -d",
     "docker:down": "docker compose down",

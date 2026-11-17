@@ -7,12 +7,15 @@ users create, run, monitor, schedule, and retry background jobs (CSV
 processing, external API calls, email, report generation, and more) without
 ever blocking the main API server.
 
-> **Status: Phase 8 of N — repository scaffolding, database design, a
+> **Status: Phase 11 of N — repository scaffolding, database design, a
 > working Express API with JWT auth + RBAC, a real BullMQ job pipeline
 > with every job type from the spec implemented, admin job/user
 > management with audit logging, real-time job updates + in-app
 > notifications, scheduled (cron) jobs, and a real React dashboard
-> covering every page from the spec.** This is being built incrementally
+> covering every page from the spec — plus, as of Phases 9–11, SSRF
+> protection, rate limiting, dashboard caching, worker-liveness health
+> checks, an audit-log endpoint, Swagger/OpenAPI docs, and backend +
+> frontend test suites.** This is being built incrementally
 > and documented as it goes; see [Roadmap](#roadmap) below for what's
 > next. Nothing in this repo yet claims to be the finished product.
 
@@ -229,7 +232,7 @@ To run the whole stack (API + worker included) in Docker instead of the
 
 All variables are documented inline in [`.env.example`](.env.example),
 grouped by concern (database, Redis, auth, worker, email, uploads, SSRF
-protection). Starting in Phase 2, these are validated at process startup —
+protection, rate limiting, caching, worker heartbeat). Starting in Phase 2, these are validated at process startup —
 a missing required variable fails immediately with a clear error rather
 than causing a confusing runtime failure later.
 
@@ -244,8 +247,8 @@ indexes, cascade vs. set-null on deletes) is in
 ## Security
 
 Password hashing, JWT storage, the stateless-session trade-off, how RBAC
-is enforced, and the current SSRF gap in the external-API job handlers are
-all explained in [`docs/security.md`](docs/security.md).
+is enforced, SSRF protection for the external-API job handlers, rate
+limiting, and dashboard caching are all explained in [`docs/security.md`](docs/security.md).
 
 ## Queue & worker
 
@@ -298,6 +301,14 @@ connection updates the UI without any component subscribing to socket
 events directly, and why the dashboard and admin pages are lazy-loaded
 are covered in [`docs/frontend.md`](docs/frontend.md).
 
+## API documentation
+
+In development (`NODE_ENV` not `production`), the API serves interactive
+Swagger UI at `http://localhost:4000/api-docs` and the raw OpenAPI 3.0
+document at `http://localhost:4000/api-docs.json`. The spec is
+hand-maintained in `apps/api/src/docs/` (see the comment at the top of
+`openapi.schemas.ts` for why it isn't generated from the Zod schemas).
+
 ## Testing
 
 ```bash
@@ -306,6 +317,7 @@ npm run prisma:migrate
 npm run test:api       # apps/api's vitest + supertest suite
 npm run test:worker    # apps/worker's vitest suite
 npm run test:shared    # packages/shared's vitest suite
+npm run test:web       # apps/web's vitest + Testing Library suite (jsdom)
 ```
 
 Current coverage:
@@ -343,11 +355,21 @@ Current coverage:
   publisher factory (mocked Redis connection), and the WebSocket auth
   cookie-parsing helper — **10 tests total, zero infrastructure required**
 
+- **Phases 9–11 unit suites** — the SSRF guard, rate limiter, cache,
+  dashboard-cache degradation, worker heartbeat/health, audit-log query
+  building, token/auth middleware, the centralized error handler, and the
+  shared Zod schemas. Several of these (`rateLimitRedisCounter`, `cache`,
+  `dashboardCache`, `workerHealth`, and the worker's `heartbeat`) verify
+  real Redis semantics and need `docker compose up -d redis`; the rest
+  need no infrastructure.
+- **Frontend (`apps/web`)** — Vitest + Testing Library + jsdom: login,
+  register, route guards, job creation (type-aware forms, upload),
+  dashboard, job list, job details (state-dependent actions, timeline,
+  attempts), the shared UI primitives, and the formatting helpers —
+  104 tests, with the API module mocked. See `docs/frontend.md`.
+
 More suites are added alongside each new feature, not written
-speculatively ahead of the code they test. The frontend (`apps/web`) has
-no automated tests yet — see `docs/frontend.md` for what verification it
-did get (a full production build against real dependency versions) and
-why real test coverage is scoped to Phase 11 instead.
+speculatively ahead of the code they test.
 
 ## Roadmap
 
@@ -361,9 +383,9 @@ Built incrementally, one phase at a time, each verified before moving on:
 - [x] **Phase 6** — WebSocket real-time job updates (via a Redis pub/sub bridge from the worker), in-app notifications
 - [x] **Phase 7** — Scheduled jobs (cron): full CRUD, a real scheduler creating real jobs on time
 - [x] **Phase 8** — React dashboard: every page from section 32, connected to the real API and WebSocket events, verified with a real production build
-- [ ] **Phase 9** — Rate limiting, caching (including the dashboard stats endpoint), SSRF protection, security hardening
-- [ ] **Phase 10** — Full health checks (worker liveness), observability, admin monitoring (including an audit-log endpoint)
-- [ ] **Phase 11** — Broader test coverage (including the frontend, which has none yet), Swagger/OpenAPI docs
+- [x] **Phase 9** — Rate limiting, caching (including the dashboard stats endpoint), SSRF protection, security hardening
+- [x] **Phase 10** — Full health checks (worker liveness), observability, admin monitoring (including an audit-log endpoint)
+- [x] **Phase 11** — Broader test coverage (including the frontend, which has none yet), Swagger/OpenAPI docs
 - [ ] **Phase 12** — Web app Docker image, CI/CD, deployment docs
 
 > Structured logging, `/health` (API + database + Redis), configurable

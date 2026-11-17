@@ -1,6 +1,6 @@
 import { userRepository } from '../repositories/user.repository';
 import { jobRepository, type JobListFilters } from '../repositories/job.repository';
-import { auditLogRepository } from '../repositories/audit.repository';
+import { auditLogRepository, type AuditLogListFilters } from '../repositories/audit.repository';
 import { NotFoundError, ValidationError } from '../utils/errors';
 
 export const adminService = {
@@ -18,6 +18,17 @@ export const adminService = {
 
   listUsers(params: { page: number; limit: number }) {
     return userRepository.findAll(params);
+  },
+
+  /**
+   * Phase 10.2 — same trust model as listAllJobs above: no per-row
+   * ownership check, because the route this backs
+   * (`GET /api/v1/admin/audit-logs`) is gated by `authorize('ADMIN')` at
+   * the route level, and an audit log is by definition not scoped to
+   * "the requester's own" anything.
+   */
+  listAuditLogs(filters: AuditLogListFilters) {
+    return auditLogRepository.findAll(filters);
   },
 
   async setUserActive(targetUserId: string, isActive: boolean, actingAdminId: string) {

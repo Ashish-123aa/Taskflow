@@ -99,7 +99,7 @@ the team is using. Docker Compose describes that whole topology in one
 file and brings it up with one command, instead of every developer
 manually installing and configuring Postgres and Redis themselves.
 
-## Current status (through Phase 8)
+## Current status (through Phase 11)
 
 What exists right now:
 - Monorepo structure (`apps/api`, `apps/worker`, `apps/web`, `packages/shared`)
@@ -135,20 +135,27 @@ What exists right now:
   admin job/user management — all connected to the WebSocket events above
   — see [`docs/frontend.md`](frontend.md)
 - `GET /api/v1/dashboard/stats`, added specifically to support the
-  dashboard UI (no Redis caching layer on it yet — that's still Phase 9)
+  dashboard UI (cached per user in Redis as of Phase 9 — see
+  [`docs/security.md`](security.md))
 - `docker/api.Dockerfile` and `docker/worker.Dockerfile`, both real
+- **Phase 9** — SSRF protection for the external-API job handlers (a
+  worker-side guard that resolves and validates every hop), Redis-backed
+  rate limiting (auth / general API / job creation), and per-user caching
+  of the dashboard stats — see [`docs/security.md`](security.md)
+- **Phase 10** — worker liveness in `GET /health` (a heartbeat key with a
+  TTL; the `worker` field reads `healthy`, `unhealthy`, or `unknown` when
+  Redis itself is unreachable) and `GET /admin/audit-logs` — see
+  [`docs/worker-system.md`](worker-system.md) and [`docs/admin.md`](admin.md)
+- **Phase 11** — a hand-maintained OpenAPI document with Swagger UI at
+  `/api-docs` (development only), broader backend unit tests, and a
+  Vitest + Testing Library suite for the frontend
 
 What's deliberately *not* built yet:
 - A `docker/web.Dockerfile` / containerized frontend (Phase 12)
-- Rate limiting, caching (including on the dashboard stats endpoint),
-  SSRF protection (see the Phase 3 note in `docs/security.md` — the
-  `API_REQUEST`/`SCHEDULED_API_FETCH` handlers don't have this yet)
-- Full `/health` coverage for worker liveness, and an endpoint to read
-  the audit log that's now being written (both deferred to Phase 10)
+- CI/CD (GitHub Actions) and deployment docs (Phase 12)
 - A cleanup lifecycle for uploaded/generated files (see
   `docs/file-handling.md`)
-- Frontend test coverage (see `docs/frontend.md`) and a profile-editing
-  endpoint (the Profile page is currently read-only)
+- A profile-editing endpoint (the Profile page is currently read-only)
 
 Each of those becomes its own phase, building on this foundation, with its
 own explanation doc added here as it lands.
